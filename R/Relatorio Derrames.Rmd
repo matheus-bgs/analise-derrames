@@ -1,0 +1,669 @@
+---
+title: "EDA Dados sobre Derrames"
+author: "Matheus Borges"
+output: 
+  html_document:
+    toc: true
+runtime: shiny
+indent: true
+---
+
+<style type="text/css">
+  body{
+  font-size: 12pt;
+  text-align: justify
+}
+
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE,
+                      message = FALSE, fig.align = "center")
+```
+
+## Ideais iniciais
+No seguinte relatório foi feita uma análise exploratória de dados (EDA) referentes à informações sobre pacientes que apresentaram (ou não) derrame cerebral (AVC) e demais variáveis que podem estar correlacionadas com esse desfecho. O objetivo deste é, então, por meio da visualização e manipulação dos dados, buscar compreender a natureza das variáveis, suas distribuições e como elas estão relacionadas com a variável de desfecho (derrame); ou seja, o seguinte trabalho é uma EDA do banco de dados para futura modelagem sobre a variável de interesse.
+
+## Pacotes, funções e importação dos dados
+Primeiramente, é feita a chamada de pacotes que serão utilizados em diversas instâncias, a criação de funções para reduzir o tamanho do relatório e a importação do banco de dados que será analisado.
+
+Também há uma breve visualização da estrutura do banco de dados, podendo apresentar as variáveis e algumas características delas.
+
+```{r, warning=FALSE, message=FALSE}
+# Pacotes
+library(shiny)
+library(ggplot2)
+"%>%" <- magrittr::"%>%"
+
+source("functions/plots.R")
+source("functions/tables.R")
+source("functions/pred.R")
+
+# Importando os dados e primeira visualização
+dados_orig <- readr::read_csv("../Dados/healthcare-dataset-stroke-data.csv")
+```
+
+```{r, echo=FALSE}
+ui <- fluidPage(
+  DT::DTOutput("head")
+)
+
+server <- function(input, output, session){
+  output$head <- DT::renderDT(
+    dados_orig,
+    options = c(list(pageLength = 8), searching = FALSE,
+                lengthChange = FALSE)
+    )
+}
+
+shinyApp(ui, server, options = list(height = 450))
+```
+
+```{r, echo=FALSE}
+choices_freq <- dados_orig %>% 
+  dplyr::select(-id, -age, -avg_glucose_level, -bmi)
+
+shinyApp(ui = fluidPage(
+  selectInput("select", "Selecionar coluna", choices = names(choices_freq)), 
+  DT::DTOutput("data_count")
+  ),
+  server = function(input, output, session){
+    selected <- reactive({
+      dados_orig %>%
+        dplyr::select(input$select)
+      })
+    output$data_count <- DT::renderDT(
+      dados_orig %>%
+        dplyr::count(selected()),
+      options = list(dom = 't')
+  )}, 
+  options = list(height = 200))
+```
+
+
+## Tratamento dos dados
+Aqui foi feito um breve tratamento para que os dados fossem mais homogêneos, isto é, foi removida a observação com valor único para a variável `gender`. Também, as observações com valores "N/A" e "Unknown" foram alteradas para `NA`. Por fim, a variável `bmi` tornou-se numérica e as variáveis `stroke`, `hypertension` e `heart_disease` tornaram-se fatores.
+
+Agora, com o tratamento dos dados realizado, podemos visualizar quantos valores `NA` realmente temos para cada variável. Além disso, teremos a análise descritiva de todas variáveis numéricas.
+
+```{r, warning=FALSE}
+dados <- dados_orig
+
+# Verificação de NAs em bmi
+dados_orig %>% 
+  dplyr::filter(bmi == "N/A") %>% 
+  nrow()
+
+dados$bmi[dados$bmi == "N/A"] <- NA
+
+# Verificação de NAs em smoking_status
+dados_orig %>% 
+  dplyr::filter(smoking_status == "Unknown") %>% 
+  nrow()
+
+dados$smoking_status[dados$smoking_status == "Unknown"] <- NA
+
+# Alterando classes
+dados <- dados %>% 
+  dplyr::select(-id) %>% 
+  dplyr::filter(gender != "Other") %>% 
+  dplyr::mutate(bmi = as.numeric(bmi),
+                stroke = as.factor(stroke),
+                hypertension = as.factor(hypertension),
+                heart_disease = as.factor(heart_disease))
+
+# Contando os NAs e soltando em formato de tabela
+dados_na <- as.data.frame(sapply(dados, function(x){sum(is.na(x))}))
+colnames(dados_na) <- "NA"
+
+dados_na %>% 
+  knit_kable(caption = "Dados faltantes por colunas")
+
+# Análise descritiva das variáveis numéricas
+summ <- c(mean = mean, median = median,
+               min = min, max = max, sd = sd)
+
+dados %>%
+  dplyr::select(where(is.double)) %>% 
+  purrr::map_df(~ summ %>% 
+                  purrr::map(purrr::exec, .x, na.rm = TRUE), .id = "variable") %>% 
+  dplyr::mutate(dplyr::across(2:6, round, 2)) %>% 
+  knit_kable(caption = "Dados numéricos sumarizados")
+```
+
+## Visualização gráfica
+Primeiro, foram criados objetos com auxílio das funções definidas para gráficos que conterão as distribuições de todas as variáveis do banco de dados. Esses podem então ser apresentados de maneira interativa.
+
+```{r, warning=FALSE, results='hide'}
+# Variáveis caracteres
+bar_gender <- plot_bar(dados, x = gender, fill = stroke,
+                        title = "Distribuição dos Gêneros", xlab = "Gêneros")
+bar_hypertension <- plot_bar(dados, x = hypertension, fill = stroke,
+                              title = "Distribuição de Hipertensão",
+                             xlab = "Hipertensão")
+bar_heart_disease <- plot_bar(dados, x = heart_disease, fill = stroke,
+                               title = "Distribuição de Doenças Cardiovasculares",
+                               xlab = "Doenças Cardiovasculares")
+bar_ever_married <- plot_bar(dados, x = ever_married, fill = stroke,
+                              title = "Distribuição de \"Já casado\"",
+                              xlab = "\"Já casado\"")
+bar_work_type <- plot_bar(dados, x = work_type, fill = stroke,
+                           title = "Distribuição de Ocupações",
+                           xlab = "Tipo de ocupação")
+bar_residence_type <- plot_bar(dados, x = Residence_type, fill = stroke,
+                                title = "Distribuição de Região",
+                                xlab = "Região")
+bar_smoking_status <- plot_bar(dados, x = smoking_status, fill = stroke,
+                                title = "Distribuição de Tabagismo",
+                                xlab = "Situação de Tabagismo")
+bar_stroke <- plot_bar(dados, x = stroke, fill = stroke,
+                       title = "Distribuição Derrames",
+                       xlab = "Derrame")
+
+# Variáveis numéricas
+hist_age <- plot_hist(dados, x = age, fill = stroke,
+                      binwidth = 5, title = "Distribuição de Idades",
+                      xlab = "Idade")
+
+box_age <- plot_box(dados, y = age, title = "Boxplot de Idades X Derrames",
+                    xlab = "Derrame", ylab = "Idades")
+
+hist_glucose <- plot_hist(dados, x = avg_glucose_level, fill = stroke,
+                          binwidth = 15, xlab = "Glicose",
+                          title = "Distribuição de Glicose")
+
+box_glucose <- plot_box(dados, y = avg_glucose_level,
+                            title = "Boxplot de Glicose X Derrames",
+                            xlab = "Derrame", ylab = "Glicose")
+
+hist_bmi <- plot_hist(dados, x = bmi, fill = stroke,
+                      binwidth = 5, title = "Distribuição de IMC",
+                      xlab = "Índice de Massa Corporal")
+
+box_bmi <- plot_box(dados, y = bmi, title = "Boxplot de IMC X Derrames",
+                    xlab = "Derrame", ylab = "IMC")
+```
+
+```{r, echo=FALSE, warning=FALSE}
+variaveis <- c("Doença cardiovascular", "Sexo", "Idade", "Hipertensão",
+               "Já casou?", "Tipo de trabalho", "Região de residência",
+               "Glicose média", "IMC", "Situação de Fumante", "Derrame")
+
+plots <- list("Doença cardiovascular" = plotly::ggplotly(bar_heart_disease),
+              "Sexo" = plotly::ggplotly(bar_gender), 
+              "Hipertensão" = plotly::ggplotly(bar_hypertension),
+              "Já casou?" = plotly::ggplotly(bar_ever_married),
+              "Tipo de trabalho" = plotly::ggplotly(bar_work_type),
+              "Região de residência" = plotly::ggplotly(bar_residence_type),
+              "Situação de Fumante" = plotly::ggplotly(bar_smoking_status), 
+              "Derrame" = plotly::ggplotly(bar_stroke),
+              "Idade" = plotly::subplot(hist_age, box_age), 
+              "Glicose média" = plotly::subplot(hist_glucose, box_glucose),
+              "IMC" = plotly::subplot(hist_bmi, box_bmi)
+              )
+
+shinyApp(ui = ui <- fluidPage(
+           selectInput("variable", "Escolha uma variável", choices = c(variaveis)),
+           plotly::plotlyOutput("plot")), 
+         server = function(input, output, session){
+           output$plot <- plotly::renderPlotly(
+             plots[input$variable][[1]]
+             )},
+         options = list(height = 500))
+```
+
+Agora, por questão de brevidade e didática, nos atentaremos a analisar apenas as variáveis: idade, "já casado", tipo de trabalho e derrame. Essas variáveis foram escolhidas pelos seguintes fatos:
+
+ + Idade: é uma variável numérica, que parece ter bastante relação com a variável resposta dos dados;
+ + "Já casado": é uma variável categórica que parece ter uma relação com a variável resposta;
+ + Tipo de trabalho: é uma variável categórica com diversos fatores;
+ + Derrame: é a variável resposta dos dados.
+
+
+## Análise das variáveis escolhidas
+Dentre as variáveis que temos, aparentemente a que melhor explica a variável resposta é a idade. Aparentemente, pessoas que têm menos de $40$ raramente têm derrames. Primeiramente, verificaremos a porcentagem de pessoas que tiveram derrames em cada grupo de idades (os grupos serão $(0, 5]$, $(5, 10]$, ..., $(80, 85]$) pelo total de pessoas em cada um desses grupos. Dessa forma, teremos uma visão mais clara de como a idade impacta na prevalência de derrames.
+
+### Idade
+
+```{r}
+plot_idades <- dados %>%
+  dplyr::mutate(age_groups = 5 * cut(age, breaks = seq(from = 0, to = 85,
+                                                       by = 5),
+                                     right = T, labels = F)) %>% 
+  percent_table(., var1 = age_groups, var2 = stroke,
+                   condition_var2 = 1) %>% 
+  ggplot() +
+  geom_line(aes(x = age_groups, y = percent), size = 1,
+            color = "#336600") +
+  geom_point(aes(x = age_groups, y = percent), size = 3,
+             color = "#336600") +
+  labs(title = "Derrame por Grupo de Idades (%)",
+       x = "Grupos de Idades", y = "Porcentagem")
+
+shiny::div(plotly::ggplotly(plot_idades, tooltip = list("percent")), align = "center")
+```
+
+Como dito anteriormente, antes dos $40$ anos de idade existem apenas raros casos de derrame, porém a partir dessa idade há um aumento (análogo a um aumento exponencial?) chegando a até $25\%$ em torno dos $80$ anos, ou seja, é esperado que em média $1$ em cada $4$ pessoas terâo derrames nessa faixa etária - de acordo com esses dados. 
+
+
+### "Já casou?"
+Agora que entende-se a relação da variável idade, torna-se a atenção para a variável que identifica se o indivíduo já se casou: `ever_married`. Pelo gráfico, pode-se inferir que indivíduos que já casaram têm mais chance de apresentarem derrames, vejamos esse gráfico novamente e uma tabela que compara pessoas já casadas e nunca casadas em relação a derrames.
+
+```{r}
+shiny::div(plotly::ggplotly(bar_ever_married), align = "center")
+
+percent_table(dados, var1 = ever_married, var2 = stroke,
+              condition_var2 = 1, kable = T)
+```
+
+Dessa forma, pode-se assumir que o casamento aumenta as chances de derrame. Contudo, há uma ressalva: foi verificado que idade é um fator muito importante para a prevalência de derrames, sendo que indivíduos com menos de $40$ anos dificilmente apresentaram derrames. O ponto é que é muito provável que há uma forte correlação entre essas variáveis, sendo assim pessoas que já casaram tendem a ser mais velhas que pessoas que nunca casaram. Verifica-se essa relação a seguir.
+
+```{r}
+dados %>% 
+  dplyr::group_by(ever_married) %>% 
+  dplyr::summarise(mean_age = round(mean(age), 2)) %>% 
+  knit_kable()
+
+plot_idade_married <- plot_hist(dados, x = age, fill = ever_married, binwidth = 5)
+
+shiny::div(plotly::ggplotly(plot_idade_married), align = "center")
+```
+
+Pode-se confirmar então que indivíduos que já se casaram são em maioria mais velhos e, por consequência de serem mais velhos têm mais chances de apresentarem derrames. Ressalta-se ainda que a literatura acadêmica sobre esse regressor (estado civil) indica que ele pode ter alguma condição de relação com a variável resposta, visto que algumas pesquisas acabarma por fazer uso deste, porém não é unânime e, dessa forma, deve ser considerado de acordo com os dados que estão sendo trabalhados e, no fim, de critério do autor da análise.
+
+O mais importante é que reconhecemos que talvez a relação dessa variável não seja tão simples com a variável resposta como pensa-se em primeira instância.
+
+
+### Tipo de trabalho
+Primeiramente, a variável está dividida em $5$ categorias: $3$ diferentes linhas de emprego, pessoas que nunca trabalharam e crianças. Assim, verifica-se o que significam de fato essas categorias de acordo com as demais variáveis; por exemplo: a categoria `children` significa que a pessoa trabalha com crianças ou que é uma criança? `Never_worked` são adultos que nunca trabalharam? Para responder essas perguntas, verificam-se os seguintes resultados.
+
+```{r}
+# Children
+dados %>% 
+  dplyr::filter(work_type == "children") %>% 
+  dplyr::count(age) %>% 
+  dplyr::arrange(desc(age)) %>% 
+  head(., 8) %>% 
+  knit_kable()
+```
+
+A partir da tabela acima, que apresenta apenas as primeiras $6$ observações, percebe-se que a máxima idade que associa a ocupação a crianças é $16$. Logo, compreende-se que a definição `children` é passada para menores de idade. Toda pessoa que tem a definição `children` é menor de idade, mas todos menores de idade possuem a definição `children`?
+
+```{r}
+dados %>% 
+  dplyr::filter(age < 18) %>% 
+  dplyr::count(work_type) %>%  # total de menores de idade igual a 856
+  knit_kable()
+```
+
+Todos tipos de ocupação estão representados por menores de idade. As ocupações `Govt_job`, `Private` e `Self-employed` não são um problema, visto que menores de idade podem trabalhar e ocupar essas posições (trabalhando em prefeituras, em empresas ou como autônomos/donos de negócios), contudo a presença de ambas observações `children` e `Never_worked` entram em conflito. Parece que, quando a coleta dos dados foi feita não houve uma atenção para a normalização das respostas entre as faixas etárias. Antes de qualquer conclusão, visualiza-se a tabela com informações sobre `Never_worked`.
+
+```{r}
+# Never_worked
+dados %>% 
+  dplyr::filter(work_type == "Never_worked") %>% 
+  dplyr::count(age) %>% 
+  head(., 8) %>% 
+  knit_kable()
+```
+
+Fica claro que há um conflito de informações entre a resposta `Never_worked` e `children`, visto que pessoas com até $16$ anos foram categorizadas como `children`, porém pessoas com $13$ anos também foram classificadas como `Never_worked`. Logo, algo precisa ser feito para que os dados sejam homogêneos. Uma transformação será feita de como que todas os menores $16$ que apresentam o valor `Never_worked` sejam classificados como `children`, já que esse é o teto encontrado anteriormente para o valor.
+
+```{r}
+dados_limpo <- dados %>%
+  dplyr::mutate(work_type = ifelse(work_type == "Never_worked" & age <= 16,
+                                   "children", work_type))
+```
+
+Agora há homogeneidade nos dados referentes à ocupação. Portanto, pessoas entre $0$ e $16$ anos que não possuem ocupação formal são consideradas `children` e os maiores de $16$ são considerados `Never_worked`. Anteriormente também foi visto que diversos menores de idade possuem ocupação, com cargos no governo, como autônomos/donos de negócios ou em empresas. O mais novo possui $7$ anos e trabalha de forma autonoma, entretanto até mesmo algumas crianças de $8$ e $13$ anos trabalham formalmente em empresas privadas. Esses dados podem ser erros de coleta, porém não há alguma forma de confirmar essa especulação e, portanto, nada será feito sobre isso nessa etapa.
+
+Por curiosidade, as pessoas com idade mais avançada ($82$ anos) apresentam os três tipos de ocupação. Possivelmente essa era a linha de trabalho dessas pessoas antes da aposentadoria, visto que seria bastante improvável que os quase $1000$ idosos presentes no banco de dados ainda estivessem trabalhando ativamente.
+
+O gráfico da ocupação (comparando com a variável resposta) é, então, reproduzido novamente.
+
+```{r}
+bar_work_type_limpo <- plot_bar(dados_limpo, x = work_type, fill = stroke,
+                          title = "Distribuição de Ocupações",
+                          xlab = "Tipo de ocupação")
+
+shiny::div(plotly::ggplotly(bar_work_type_limpo), align = "center")
+```
+
+Como esperado, não houve uma mudança muito visível, visto que menos de $20$ observações - dentre as $5099$ totais - foram alteradas. Ainda, não parece haver uma relação muito clara entre a variável resposta e o tipo de ocupação de um indivíduo a partir do gráfico. A quantidade absoluta de pessoas que trabalham em empresas privadas é mais que o dobro daqueles autônomos/donos de negócios e mais que o quadrúplo daqueles que trabalham para o governo, porém isso pode não significar tanto de forma relativa, já que mais da metade das pessoas trabalham em empresas. Verifica-se então a relação relativa desses ramos.
+
+```{r}
+percent_table(dados_limpo, var1 = work_type, var2 = stroke,
+              condition_var2 = 1, kable = T)
+```
+
+Pode-se visualizar que, como esperado dada a idade, menores de idade dificilmente apresentam caso de derrame, representando apenas $0.29\%$. `Never_worked`, talvez pelo tamanho da amostra e pela natureza de idades menores, apresenta nenhum caso de derrame. Sobre os três tipos de ocupações formais, como comentado anteriormente os valores absolutos não contam toda a história: há valores muito próximos (com diferença de apenas $0.08\%$ pontos percentuais) entre os ramos privados e estatais, em torno de $5\%$ dos totais para essas ocupações. A ocupação que tem maior relação com derrames é `Self-employed`, porém, novamente, essa relação pode não ser tão simples. Isso pode ser dado pelo fato de que há uma maior concentração de pessoas com idade avançada e classificadas como `Self-employed` (mais que o dobro das outras ocupações).
+
+Primeiramente, os dados da forma que foram coletados não contam o histórico dos indivíduos, afinal, uma pessoa pode ter trabalhado no mercado de trabalho, então tido uma carreira pública e no final de sua vida essa pessoa pode ter criado seu próprio negócio. Os dados estão contando apenas a ocupação atual dessas pessoas (ou, possivelmente, a mais impactante/mais recente no caso dos aposentados). Poderia ser interessante criar uma nova categoria: `retired` que conteria aqueles que já estão provavelmente aposentados ou perto disso.
+
+Existem alguns problemas para a criação dessa categoria: primeiramente, alguém pode muito bem seguir trabalhando mesmo em uma idade avançada ($70$ anos ou mais); além disso, não existe informação que especifica de qual país ou paises os dados foram coletados. O disponibilizador deste banco de dados é espanhol, porém esses podem ser dados estadunidenses, canadenses, de qualquer lugar da Europa, de diversos países e etc. Contudo, por questão de prática e curiosidade, será criada a categoria `retired` para indivíduos com mais de $65$ anos, visto que essa é a média mundial e também a da maior parte dos países. Isso significaria um total de $955$ observações nesta categoria, porém, como dito anteriormente, existe a possibilidade de muitas pessoas estarem ativamente trabalhando mesmo após os $65$ anos, e há uma maior concentração de pessoas classificadas como `Self-employed` que nas outras ocupações.
+
+Dessa forma, não será criada essa categoria, pois ela não significaria muito para quaisquer predições futuras e para a relação com a variável resposta.
+
+
+### Derrames
+Sobre a variável resposta do banco de dados, a ocorrência de derrames em indivíduos, há uma grande discrepância entre as duas possibilidades ($0$ de não ocorrência e $1$ de ocorrência). Mais precisamente há $5.12\%$ de indivíduos que já tiveram derrame em suas vidas nesse banco de dados e alguns parecem ser _outliers_, como o bebê de $1.32$ anos e o adolescente de $14$ anos. Aqui não será feita remoção de observações ainda, pois ainda não temos todas as ferramentas necessárias para verificar se essas observações irão influenciar na modelagem dos dados.
+
+Sobre as demais variáveis que ainda não foram exploradas, suas relações com a variável resposta não é tão evidente e pode não haver uma grande correlação entre essas. É provável que não será simples estabelecer essas relações sem a modelagem estatística dos dados. É importante relembrar que em torno de $30\%$ das observações para a variável `smoking_status` estão faltando e isso pode estar influenciando como essa variável é visualizada em relação ao desfecho. Na próxima etapa deste trabalho será feita a estimação desses valores faltantes e revisitaremos a relação dessa variável com a variável de desfecho.
+
+## Modelagem
+Após a análise descritiva que permitiu a compreensão da base de dados e suas características, deve ser realizada então a modelagem. A parte interessante de análise para esses dados dá-se pela característica de desbalanceamento dos mesmos, ou seja, sem atenção para detalhes na modelagem pode gerar modelos tendenciosos, já que 95% das observações para a variável resposta estão como "ausente".
+
+Antes da apresentação dos modelos, foi testada a possibilidade de utilizar regressão logística (pelo ganho em discussão inferencial das variáveis quanto ao modelo), contudo os resultados foram bastante inferiores àqueles encontrados por meio do Random Forest.
+
+O modelo foi definido como um Random Forest (com uso do pacote `ranger`) com tunagem para os três hiperparâmetros possíveis: 
+ + `mtry`: o número de variáveis selecionadas aleatoriamente em cada modelo de árvore;
+ + `trees`: o número de árvores a serem geradas;
+ + `min_n`: o número mínimo de pontos para que o nó seja dividido.
+
+A tunagem foi feita com validação cruzada por meio de reamostragem no grupo de treino (que contém 75% dos dados da base). Foram utilizadas cinco dobras na validação cruzada, visto que mais dobras não apresentaram resultados superiores - apesar de aumentar o tempo de processamento consideravelmente - com um grid de tamanho 100 para os possíveis valores dos hiperparâmetros.
+
+Dentre os passos de pré-processamento, foram feitos os seguintes ajustes: dummies foram criadas para variáveis de classes, houve normalização das variáveis numéricas e a imputação de dados ausentes para `bmi` e `smoking_status` com uso do algoritmo de K-Vizinhos Mais Próximos (KNN), utilizando o número de vizinhos mais usual (a raiz quadrada do tamanho das observações dos dados de treino). 
+
+Assim, foram gerados três modelos, com o intuito de testar qual seria o efeito de um passo a mais no pré-processamento: dado pelo uso de técnicas de sobreamostra com apoio de Random Over-Sampling Examples (ROSE) e Synthetic Minority Over-Sampling Technique (SMOTE). Portanto, existem três modelos, que serão identificados como:
+ 
+ + Normal: o modelo que não faz uso de método de sobreamostragem;
+ + ROSE: o modelo que faz uso do método ROSE;
+ + SMOTE: o modelo que faz uso do método SMOTE.
+ 
+A razão utilizada para a sobreamostragem foi de 1:1, ou seja, após o pré-processamento de sobreamostragem os dados ficam com proporção igual nas classes dos dados. Assim, a variável `stroke` que tinha 5 observações positivas a cada 100 observações, fica com 50 positivas a cada 100 observações (com as 50 demais negativas). Esses passos de pré-processamento são adicionados à "receita" de passos durante o processo de modelagem de cada modelo, respectivamente.
+
+Como alvo para a modelagem foram utilizadas as métricas de acurácia, sensibilidade e especificidade, sendo a última de extrema importância para a natureza desses dados pela baixa quantidade de observações de fato positivas e, ainda, pela consideração de que "é pior errar alguém que tenha altas chances de ter derrames do que errar alguém que tenha altas chances de não ter derrames". Para limite de corte da previsão, ou seja, o valor que define se uma previsão será negativa ou positiva foi definido de acordo com a curva ROC - passo que foi essencial, já que quando era definido como o padrão (de 0.5) a especificidade era terrível.
+
+```{r, echo = F}
+df <- dados_limpo
+```
+
+```{r}
+# # Modelagem
+# # Definindo o modelo
+# rf_model <- parsnip::rand_forest(mode = "classification",
+#                                  mtry = tune(),
+#                                  trees = tune(),
+#                                  min_n = tune()) %>%
+#   parsnip::set_engine("ranger", importance = "impurity")
+# 
+# Separando a base
+set.seed(1984)
+split <- rsample::initial_split(df)
+train <- rsample::training(split)
+test <- rsample::testing(split)
+
+# Validação cruzada
+# set.seed(1984)
+# cross_val <- rsample::vfold_cv(train, v = 5)
+# 
+# ## Modelo "normal"
+# 
+# ### Fazendo a receita sem usar ROSE
+# receita_normal <- recipes::recipe(stroke ~ ., data = train) %>%
+#   recipes::step_string2factor(gender, ever_married, work_type,
+#                               Residence_type, smoking_status) %>%
+#   recipes::step_impute_knn(bmi, smoking_status,
+#                            neighbors = round(sqrt(nrow(train)))) %>%
+#   recipes::step_dummy(recipes::all_nominal_predictors()) %>%
+#   recipes::step_zv(recipes::all_predictors()) %>%
+#   recipes::step_normalize(recipes::all_numeric_predictors())
+# 
+# ### Workflow
+# workflow_normal <- workflows::workflow() %>%
+#   workflows::add_model(rf_model) %>%
+#   workflows::add_recipe(receita_normal)
+# 
+# 
+# ### Tunagem de hiperparâmetros
+# set.seed(1984)
+# tunagem_normal <- tune::tune_grid(
+#   workflow_normal,
+#   cross_val,
+#   grid = 100,
+#   metrics = yardstick::metric_set(yardstick::accuracy,
+#                                   yardstick::sensitivity,
+#                                   yardstick::specificity),
+#   control = tune::control_grid(verbose = TRUE, allow_par = FALSE)
+# )
+# 
+# tunagem_normal %>%
+#   tune::show_best(metric = "accuracy")
+# 
+# tunagem_normal %>%
+#   tune::show_best(metric = "specificity")
+# 
+# tunagem_normal %>%
+#   tune::show_best(metric = "sensitivity")
+# 
+# ### Finalizando o workflow
+# workflow_normal <- workflow_normal %>%
+#   tune::finalize_workflow(tune::select_best(tunagem_normal, "sensitivity"))
+# 
+# ### Finalizando o modelo
+# rf_model_normal <- workflow_normal %>%
+#   parsnip::fit(data = train)
+# 
+# rf_model_normal %>%
+#   readr::write_rds("Modelos/modelo_normal.rds")
+# 
+rf_model_normal <- readr::read_rds("../Modelos/modelo_normal.rds")
+# 
+# ## Usando ROSE
+# ### Fazendo a receita usando ROSE
+# receita_rose <- recipes::recipe(stroke ~ ., data = train) %>%
+#   recipes::step_string2factor(gender, ever_married, work_type,
+#                               Residence_type, smoking_status) %>%
+#   recipes::step_impute_knn(bmi, smoking_status,
+#                            neighbors = round(sqrt(nrow(train)))) %>%
+#   recipes::step_dummy(recipes::all_nominal_predictors()) %>%
+#   recipes::step_zv(recipes::all_predictors()) %>%
+#   recipes::step_normalize(recipes::all_numeric_predictors()) %>%
+#   themis::step_rose(stroke, seed = 1984)
+# 
+# ### Workflow
+# workflow_rose <- workflows::workflow() %>%
+#   workflows::add_model(rf_model) %>%
+#   workflows::add_recipe(receita_rose)
+# 
+# ### Tunagem de hiperparâmetros
+# set.seed(1984)
+# tunagem_rose <- tune::tune_grid(
+#   workflow_rose,
+#   cross_val,
+#   grid = 100,
+#   metrics = yardstick::metric_set(yardstick::accuracy,
+#                                   yardstick::sensitivity,
+#                                   yardstick::specificity),
+#   control = tune::control_grid(verbose = TRUE, allow_par = FALSE)
+# )
+# 
+# tunagem_rose %>%
+#   tune::show_best(metric = "accuracy")
+# 
+# tunagem_rose %>%
+#   tune::show_best(metric = "specificity")
+# 
+# tunagem_rose %>%
+#   tune::show_best(metric = "sensitivity")
+# 
+# ### Finalizando o workflow
+# workflow_rose <- workflow_rose %>%
+#   tune::finalize_workflow(tune::select_best(tunagem_rose, "sensitivity"))
+# 
+# ### Finalizando o modelo
+# rf_model_rose <- workflow_rose %>%
+#   parsnip::fit(data = train)
+# 
+# rf_model_rose %>%
+#   readr::write_rds("Modelos/modelo_rose.rds")
+
+rf_model_rose <- readr::read_rds("../Modelos/modelo_rose.rds")
+```
+
+```{r}
+# ## Modelo SMOTE
+# ### Receita
+# receita_smote <- recipes::recipe(stroke ~ ., data = train) %>%
+#   recipes::step_string2factor(gender, ever_married, work_type,
+#                               Residence_type, smoking_status) %>%
+#   recipes::step_impute_knn(bmi, smoking_status,
+#                            neighbors = round(sqrt(nrow(train)))) %>%
+#   recipes::step_dummy(recipes::all_nominal_predictors()) %>%
+#   recipes::step_zv(recipes::all_predictors()) %>%
+#   recipes::step_normalize(recipes::all_numeric_predictors()) %>%
+#   themis::step_smote(stroke, seed = 1984, over_ratio = 0.5)
+# 
+# ### Workflow
+# workflow_smote <- workflows::workflow() %>%
+#   workflows::add_model(rf_model) %>%
+#   workflows::add_recipe(receita_smote)
+# 
+# ### Tunagem de hiperparâmetros
+# set.seed(1984)
+# tunagem_smote <- tune::tune_grid(
+#   workflow_smote,
+#   cross_val,
+#   grid = 100,
+#   metrics = yardstick::metric_set(yardstick::accuracy,
+#                                   yardstick::sensitivity,
+#                                   yardstick::specificity),
+#   control = tune::control_grid(verbose = TRUE, allow_par = FALSE)
+# )
+# 
+# tunagem_smote %>%
+#   tune::show_best(metric = "accuracy")
+# 
+# tunagem_smote %>%
+#   tune::show_best(metric = "specificity")
+# 
+# tunagem_smote %>%
+#   tune::show_best(metric = "sensitivity")
+# 
+# ### Finalizando o workflow
+# workflow_smote <- workflow_smote %>%
+#   tune::finalize_workflow(tune::select_best(tunagem_smote, "sensitivity"))
+# 
+# ### Finalizando o modelo
+# rf_model_smote <- workflow_smote %>%
+#   parsnip::fit(data = train)
+# 
+# rf_model_smote %>%
+#   readr::write_rds("Modelos/modelo_smote.rds")
+
+rf_model_smote <- readr::read_rds("../Modelos/modelo_smote.rds")
+```
+
+```{r}
+# Definindo as previsões
+previsao_normal <- pred(test, model = rf_model_normal)
+
+previsao_rose <- pred(test, model = rf_model_rose)
+
+previsao_smote <- pred(test, model = rf_model_smote)
+
+# Métricas das previsões
+normal_rf <- previsao_normal$df %>%  
+  yardstick::accuracy(truth = stroke,
+                      estimate = stroke_pred) %>% 
+  tibble::add_row(previsao_normal$df %>% 
+                    yardstick::sensitivity(truth = stroke,
+                                           estimate = stroke_pred)) %>% 
+  tibble::add_row(previsao_normal$df %>% 
+                    yardstick::specificity(truth = stroke,
+                                           estimate = stroke_pred)) 
+
+rose_rf <- previsao_rose$df %>% 
+  yardstick::accuracy(truth = stroke,
+                      estimate = stroke_pred) %>% 
+  tibble::add_row(previsao_rose$df %>% 
+                    yardstick::sensitivity(truth = stroke,
+                                           estimate = stroke_pred)) %>% 
+  tibble::add_row(previsao_rose$df %>% 
+                    yardstick::specificity(truth = stroke,
+                                           estimate = stroke_pred))
+
+smote_rf <- previsao_smote$df %>% 
+  yardstick::accuracy(truth = stroke,
+                      estimate = stroke_pred) %>% 
+  tibble::add_row(previsao_smote$df %>% 
+                    yardstick::sensitivity(truth = stroke,
+                                           estimate = stroke_pred)) %>% 
+  tibble::add_row(previsao_smote$df %>% 
+                    yardstick::specificity(truth = stroke,
+                                           estimate = stroke_pred))
+```
+
+Vejamos abaixo os gráficos de curva ROC para todos os modelos. Em destaque há o ponto de corte definido como melhor para a previsão com o modelo.
+
+```{r}
+gridExtra::grid.arrange(previsao_normal$plot +
+                          labs(title = "Curva ROC Normal"),
+                        previsao_rose$plot +
+                          labs(title = "Curva ROC ROSE"),
+                        previsao_smote$plot +
+                          labs(title = "Curva ROC SMOTE"), 
+                        ncol = 3)
+```
+
+Testando o modelo para as métricas definidas na modelagem e verificando as matrizes de confusão percebe-se que o modelo "normal", apesar de apresentar melhores resultados para acurácia e sensibilidade, peca em relação à especificidade (em cerca de 15 pontos percentuais) que, possivelmente, é a métrica analisada mais importante para consideração da eficácia da modelagem. 
+
+O comportamento que percebe-se é de que a sobreamostragem acaba aumentando a qualidade de predição de pessoas que podem apresentar derrames a custo da acurácia geral e da capacidade de predição de pessoas que não apresentam derrames (com perda de mais de 15 pontos percentuais). Assim, é considerado que num caso específico como esse (de extremo desbalanceamento), é possível que a sobreamostragem possa prejudicar a capacidade do modelo de definitivamente compreender a relação das covariáveis com a variável resposta.
+
+```{r}
+# Formatando em uma tabela
+tibble::tibble(
+  "Métrica" = c("Acurácia", "Sensibilidade", "Especificidade"),
+  "Normal" = round(normal_rf$.estimate, 4),
+  "ROSE" = round(rose_rf$.estimate, 4),
+  "SMOTE" = round(smote_rf$.estimate, 4)
+) %>% 
+  knit_kable(caption = "Valores das métricas treinadas para Random Forest")
+```
+
+```{r}
+# Matriz de confusão normal
+confusion_normal <- previsao_normal$df %>% 
+  yardstick::conf_mat(truth = stroke,
+                      estimate = stroke_pred)
+
+rownames(confusion_normal$table) <- c("Predição 0", "Predição 1")
+colnames(confusion_normal$table) <- c("Verdadeiro 0", "Verdadeiro 1")
+
+confusion_normal$table %>% 
+  knit_kable(caption = "Matriz de Confusão do Random Forest (Normal)")
+
+# Matriz de confusão ROSE
+confusion_rose <- previsao_rose$df %>% 
+  yardstick::conf_mat(truth = stroke,
+                      estimate = stroke_pred)
+
+rownames(confusion_rose$table) <- c("Predição 0", "Predição 1")
+colnames(confusion_rose$table) <- c("Verdadeiro 0", "Verdadeiro 1")
+
+confusion_rose$table %>% 
+  knit_kable(caption = "Matriz de Confusão do Random Forest (ROSE)")
+
+# Matriz de confusão SMOTE
+confusion_smote <- previsao_smote$df %>% 
+  yardstick::conf_mat(truth = stroke,
+                      estimate = stroke_pred)
+
+rownames(confusion_smote$table) <- c("Predição 0", "Predição 1")
+colnames(confusion_smote$table) <- c("Verdadeiro 0", "Verdadeiro 1")
+
+confusion_smote$table %>% 
+  knit_kable(caption = "Matriz de Confusão do Random Forest (SMOTE)")
+```
+
+```{r}
+# Gráfico de importância das variáveis com base no ROSE
+rf_model_rose %>% 
+  workflows::extract_fit_parsnip() %>% 
+  vip::vi(num_features = 15) %>% 
+  dplyr::mutate(abs_importance = abs(Importance),
+                Variable = forcats::fct_reorder(Variable, abs_importance)) %>% 
+  ggplot(aes(x = abs_importance, y = Variable, fill = abs_importance)) +
+  geom_col(color = "black") +
+  scale_fill_gradient2()
+```
